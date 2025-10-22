@@ -17,6 +17,7 @@ import { FilterPanel } from '@/components/search/playground/filter-panel'
 import { ResultsPanel } from '@/components/search/playground/results-panel'
 import { MobileFilterDrawer } from '@/components/search/playground/mobile-filter-drawer'
 import { SessionSidebar } from '@/components/search/playground/session-sidebar'
+import { QuickActions } from '@/components/mobile/quick-actions'
 import { mobileToast } from '@/lib/mobile-toast'
 import { checkCreditLimit, recordSearchUsage } from '@/lib/credit-manager'
 
@@ -393,6 +394,9 @@ function PlaygroundPageContent() {
         onSessionSelect={restoreSession}
         currentSessionId={currentSessionId}
       />
+
+      {/* Quick Actions (Mobile only) */}
+      <QuickActions />
     </div>
   )
 }
