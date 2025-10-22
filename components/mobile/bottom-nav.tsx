@@ -1,7 +1,7 @@
 'use client'
 
-import { Home, TrendingUp, Library, Settings, MessageSquare } from 'lucide-react'
-import { usePathname } from 'next/navigation'
+import { Home, TrendingUp, Library, Settings, MessageSquare, Shield } from 'lucide-react'
+import { usePathname, useRouter } from 'next/navigation'
 
 // Height constant for layout calculations (56px min-height + 8px padding + safe area)
 export const BOTTOM_NAV_HEIGHT = 72
@@ -24,6 +24,7 @@ export function BottomNav({
   unreadCount = 0,
 }: BottomNavProps) {
   const pathname = usePathname()
+  const router = useRouter()
 
   const tabs = [
     {
@@ -32,6 +33,13 @@ export function BottomNav({
       icon: Home,
       onClick: onHomeClick,
       active: pathname === '/',
+    },
+    {
+      id: 'check-leaks',
+      label: 'Leaks',
+      icon: Shield,
+      onClick: () => router.push('/check-leaks'),
+      active: pathname === '/check-leaks',
     },
     {
       id: 'sessions',
@@ -47,13 +55,6 @@ export function BottomNav({
       icon: TrendingUp,
       onClick: onAnalyticsClick,
       active: pathname === '/analytics',
-    },
-    {
-      id: 'library',
-      label: 'Library',
-      icon: Library,
-      onClick: onLibraryClick,
-      active: false, // Library is a modal, not a route
     },
     {
       id: 'settings',
