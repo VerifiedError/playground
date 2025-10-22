@@ -16,8 +16,21 @@ if (!process.env.GROQ_API_KEY) {
 // Use official Groq SDK instead of OpenAI SDK
 // This properly exposes Groq-specific fields like executed_tools
 // NOTE: This groq instance is SERVER-SIDE ONLY
-export const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || '',
+// Lazy initialization to avoid build-time errors
+let groqInstance: Groq | null = null
+
+export const groq = new Proxy({} as Groq, {
+  get(target, prop) {
+    if (!groqInstance) {
+      if (!process.env.GROQ_API_KEY) {
+        throw new Error('GROQ_API_KEY environment variable is not set')
+      }
+      groqInstance = new Groq({
+        apiKey: process.env.GROQ_API_KEY,
+      })
+    }
+    return groqInstance[prop as keyof Groq]
+  }
 })
 
 /**

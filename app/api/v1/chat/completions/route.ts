@@ -19,9 +19,15 @@ import { calculateMessageCost } from '@/lib/cost-calculator'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || '',
-})
+// Lazy initialization to avoid build-time errors
+function getGroqClient(): Groq {
+  if (!process.env.GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY environment variable is not set')
+  }
+  return new Groq({
+    apiKey: process.env.GROQ_API_KEY,
+  })
+}
 
 /**
  * POST /api/v1/chat/completions
@@ -107,6 +113,7 @@ export async function POST(request: NextRequest) {
 
     // Streaming response
     if (stream) {
+      const groq = getGroqClient()
       const completion = await groq.chat.completions.create(groqRequest)
 
       // Create a ReadableStream for SSE
@@ -156,6 +163,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Non-streaming response
+    const groq = getGroqClient()
     const completion = await groq.chat.completions.create(groqRequest)
 
     // Extract usage info

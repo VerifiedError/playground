@@ -27,9 +27,15 @@ import Groq from 'groq-sdk'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-})
+// Lazy initialization to avoid build-time errors
+function getGroqClient(): Groq {
+  if (!process.env.GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY environment variable is not set')
+  }
+  return new Groq({
+    apiKey: process.env.GROQ_API_KEY,
+  })
+}
 
 // Default enabled tools for Compound model
 const DEFAULT_COMPOUND_TOOLS = [
@@ -104,6 +110,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create streaming response with customizable parameters
+    const groq = getGroqClient()
     const stream = await groq.chat.completions.create(requestOptions)
 
     // Create readable stream for SSE
