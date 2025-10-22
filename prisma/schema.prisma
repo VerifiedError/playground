@@ -1,0 +1,934 @@
+// This is your Prisma schema file
+// Agentic - Standalone AI Chat Application
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER MODEL ====================
+
+model User {
+  id               Int       @id @default(autoincrement())
+  email            String    @unique
+  username         String    @unique // Required, unique, case-insensitive
+  name             String?
+  passwordHash     String    @map("password_hash") // Required for authentication
+
+  // Security fields
+  role             String    @default("user") // "admin" or "user"
+  isActive         Boolean   @default(true) @map("is_active")
+  lastLoginAt      DateTime? @map("last_login_at")
+
+  // User-specific API key (optional - falls back to global if not set)
+  apiKey           String?   @map("api_key")
+
+  // Favorite/starred models (JSON array of model IDs)
+  favoriteModels   String?   @default("[]") @map("favorite_models")
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  agenticSessions      AgenticSession[]
+  modelPresets         ModelPreset[]
+  costLimit            UserCostLimit?
+  sharedSessions       SharedSession[]
+  folders              Folder[]
+  promptTemplates      PromptTemplate[]
+  workflows            Workflow[]
+  userModelPreferences UserModelPreferences[]
+  apiKeys              ApiKey[]
+  aiSearchConversations AISearchConversation[]
+  playgroundSessions    PlaygroundSession[]
+
+  // CIA-Level Tracking Relations
+  auditLogs            AuditLog[]
+  securityEvents       SecurityEvent[]
+  apiUsageLogs         ApiUsageLog[]
+  searchAnalytics      SearchAnalytics[]
+
+  @@map("users")
+}
+
+// ==================== API KEYS ====================
+
+model ApiKey {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+
+  // Key Details
+  name          String   // Descriptive name (e.g., "Production API", "Mobile App")
+  keyHash       String   @unique @map("key_hash") // SHA-256 hash of the API key
+  keyPrefix     String   @map("key_prefix") // Visible prefix (e.g., "pk_live_abc123")
+
+  // Permissions
+  permissions   String   @default("[]") // JSON array of scopes: ["chat", "sessions", "models"]
+
+  // Rate Limiting
+  rateLimit     Int      @default(60) @map("rate_limit") // Requests per minute
+
+  // Usage Tracking
+  totalRequests Int      @default(0) @map("total_requests")
+  lastUsedAt    DateTime? @map("last_used_at")
+  lastUsedIp    String?  @map("last_used_ip")
+
+  // Status
+  isActive      Boolean  @default(true) @map("is_active")
+  expiresAt     DateTime? @map("expires_at") // Null = never expires
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  apiUsageLogs  ApiUsageLog[] // Track API usage for this key
+
+  @@index([userId])
+  @@index([keyHash])
+  @@index([keyPrefix])
+  @@map("api_keys")
+}
+
+// ==================== USER MODEL PREFERENCES ====================
+
+model UserModelPreferences {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+  modelId       String   @map("model_id")
+
+  // Model visibility for this user
+  isEnabled     Boolean  @default(true) @map("is_enabled")
+
+  // Display preferences
+  isFavorite    Boolean  @default(false) @map("is_favorite")
+  customLabel   String?  @map("custom_label")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, modelId])
+  @@index([userId])
+  @@map("user_model_preferences")
+}
+
+// ==================== AGENTIC MODELS ====================
+
+model AgenticSession {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+  title         String   @default("New Agentic Session")
+  model         String   // Model ID (e.g., 'groq/compound')
+  settings      String?  // JSON: model settings (temperature, maxTokens, etc.)
+
+  // Cost Tracking
+  totalCost     Float    @default(0) @map("total_cost")
+  inputTokens   Int      @default(0) @map("input_tokens")
+  outputTokens  Int      @default(0) @map("output_tokens")
+  cachedTokens  Int      @default(0) @map("cached_tokens")
+  messageCount  Int      @default(0) @map("message_count")
+
+  // Conversation Branching (Feature 3)
+  parentSessionId String?  @map("parent_session_id") // Session this was branched from
+  branchPoint     Int?     @map("branch_point")      // Message index where branch occurred
+
+  // Session Organization (Feature 6)
+  folderId      String?   @map("folder_id")          // Belongs to folder (null = root)
+  tags          String?   @default("[]")             // JSON array of tag names
+  isStarred     Boolean   @default(false) @map("is_starred")
+  isArchived    Boolean   @default(false) @map("is_archived")
+
+  // Session Templates (Feature 7)
+  isTemplate    Boolean   @default(false) @map("is_template")
+  templateDescription String? @map("template_description")
+
+  // Soft Delete
+  deletedAt     DateTime? @map("deleted_at") // Soft delete timestamp (null = not deleted)
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages      AgenticMessage[]
+  artifacts     Artifact[]
+  sharedSession SharedSession?
+  folder        Folder?           @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  parentSession AgenticSession?   @relation("SessionBranches", fields: [parentSessionId], references: [id], onDelete: SetNull)
+  childSessions AgenticSession[]  @relation("SessionBranches")
+  files         FileUpload[]      // Uploaded files
+  workflowRuns  WorkflowRun[]     // Workflow executions in this session
+
+  @@index([userId])
+  @@index([folderId])
+  @@index([parentSessionId])
+  @@map("agentic_sessions")
+}
+
+model AgenticMessage {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+  role          String   // 'user' | 'assistant' | 'system'
+  content       String   // Message content
+
+  // Cost Tracking (per message)
+  cost          Float    @default(0)
+  inputTokens   Int      @default(0) @map("input_tokens")
+  outputTokens  Int      @default(0) @map("output_tokens")
+  cachedTokens  Int      @default(0) @map("cached_tokens")
+
+  // Tool Usage
+  toolCalls     String?  @map("tool_calls") // JSON array of tool calls
+
+  // Image/File Attachments
+  attachments   String?  // JSON array of image attachments (base64, URL, metadata)
+
+  // Reasoning/Thinking Process
+  reasoning     String?  // Model reasoning/thinking process (for reasoning models like DeepSeek-R1, Qwen, GPT-OSS)
+
+  // Soft Delete
+  deletedAt     DateTime? @map("deleted_at") // Soft delete timestamp (null = not deleted)
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  session       AgenticSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("agentic_messages")
+}
+
+model SharedSession {
+  id            String   @id @default(cuid())
+  sessionId     String   @unique @map("session_id") // One share per session
+  userId        Int      @map("user_id") // Who created the share
+
+  // Share Configuration
+  token         String   @unique // Public share token (used in URL)
+  password      String?  // Optional password protection (hashed)
+  expiresAt     DateTime? @map("expires_at") // Null = never expires
+
+  // Analytics
+  viewCount     Int      @default(0) @map("view_count")
+  lastViewedAt  DateTime? @map("last_viewed_at")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  session       AgenticSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([sessionId])
+  @@index([userId])
+  @@map("shared_sessions")
+}
+
+// ==================== SESSION ORGANIZATION MODELS ====================
+
+model Folder {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+
+  // Folder Details
+  name          String   // Folder name (e.g., "Work Projects", "Personal")
+  color         String?  // Hex color code for UI (e.g., "#3B82F6")
+  icon          String?  // Icon name (e.g., "folder", "briefcase", "home")
+  description   String?  // Optional folder description
+
+  // Hierarchy
+  parentFolderId String?  @map("parent_folder_id") // Nested folders (null = root)
+
+  // Metadata
+  position      Int      @default(0)  // Sort order
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions      AgenticSession[]  // Sessions in this folder
+  parentFolder  Folder?           @relation("FolderHierarchy", fields: [parentFolderId], references: [id], onDelete: SetNull)
+  subFolders    Folder[]          @relation("FolderHierarchy")
+
+  @@index([userId])
+  @@index([parentFolderId])
+  @@map("folders")
+}
+
+// ==================== ARTIFACT MODELS ====================
+
+model Artifact {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+
+  type          String   // 'react', 'vanilla-js', 'html', 'vue', 'angular'
+  title         String
+  description   String?
+
+  // Multi-file support: JSON object with filename as key and content as value
+  // Example: { "App.js": "...", "styles.css": "...", "utils.js": "..." }
+  files         String   // JSON
+
+  // NPM dependencies: JSON object
+  // Example: { "three": "^0.150.0", "react-spring": "^9.7.0" }
+  dependencies  String?  // JSON (optional)
+
+  // Metadata
+  template      String?  // Template used (e.g., 'react-starter', '3d-game')
+  isPublic      Boolean  @default(false) @map("is_public") // Future: sharing
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  session       AgenticSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("artifacts")
+}
+
+// ==================== FILE UPLOADS ====================
+
+model FileUpload {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+
+  // File Details
+  filename      String
+  mimeType      String   @map("mime_type")
+  size          Int      // File size in bytes
+
+  // Extracted Content
+  extractedText String?  @map("extracted_text") @db.Text // Parsed text from file
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  session       AgenticSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("file_uploads")
+}
+
+// ==================== GROQ MODELS ====================
+
+model GroqModel {
+  id                      String   @id // e.g., 'llama-3.3-70b-versatile'
+  displayName             String   @map("display_name")
+
+  // Metadata
+  owner                   String   @default("Unknown") // Meta, Groq, OpenAI, etc.
+  modelType               String   @default("chat") @map("model_type") // chat, vision, reasoning, audio-stt, audio-tts, guard, compound
+  description             String?  // User-facing description
+  isDeprecated            Boolean  @default(false) @map("is_deprecated")
+  deprecationDate         DateTime? @map("deprecation_date")
+  releaseDate             DateTime? @map("release_date") // From API 'created' field
+
+  // Context and Limits
+  contextWindow           Int      @map("context_window")
+  maxInputTokens          Int?     @map("max_input_tokens")
+  maxOutputTokens         Int?     @map("max_output_tokens")
+  maxImageSize            Int?     @map("max_image_size") // MB
+  maxImageCount           Int?     @map("max_image_count")
+  maxAudioDuration        Int?     @map("max_audio_duration") // seconds
+
+  // Capabilities
+  supportsTools           Boolean  @default(false) @map("supports_tools")
+  supportsWebSearch       Boolean  @default(false) @map("supports_web_search")
+  supportsCodeExecution   Boolean  @default(false) @map("supports_code_execution")
+  supportsBrowserAutomation Boolean @default(false) @map("supports_browser_automation")
+  supportsVisitWebsite    Boolean  @default(false) @map("supports_visit_website")
+  supportsWolframAlpha    Boolean  @default(false) @map("supports_wolfram_alpha")
+  supportsVision          Boolean  @default(false) @map("supports_vision")
+  supportsReasoning       Boolean  @default(false) @map("supports_reasoning")
+  supportsAudio           Boolean  @default(false) @map("supports_audio")
+  supportsStreaming       Boolean  @default(true) @map("supports_streaming")
+  supportsJsonMode        Boolean  @default(false) @map("supports_json_mode")
+  supportsPromptCaching   Boolean  @default(false) @map("supports_prompt_caching")
+
+  // Pricing
+  inputPricing            Float    @map("input_pricing")
+  outputPricing           Float    @map("output_pricing")
+  inputPricingCached      Float?   @map("input_pricing_cached")
+  audioPricing            Float?   @map("audio_pricing") // Per 1M chars (TTS) or per hour (STT)
+  batchDiscount           Float?   @map("batch_discount") // e.g., 0.5 for 50% off
+
+  // Performance (optional, future)
+  avgLatencyMs            Float?   @map("avg_latency_ms")
+  tokensPerSecond         Float?   @map("tokens_per_second")
+  uptime                  Float?   @default(99.9)
+
+  // Admin overrides
+  capabilitiesOverridden  Boolean  @default(false) @map("capabilities_overridden")
+
+  // Status
+  isActive                Boolean  @default(true) @map("is_active")
+
+  // Timestamps
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@index([modelType])
+  @@index([owner])
+  @@index([isActive])
+  @@index([isDeprecated])
+  @@map("groq_models")
+}
+
+// ==================== MODEL PRESETS ====================
+
+model ModelPreset {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+  name          String
+  description   String?
+
+  // JSON config with all model settings
+  // Example: { "temperature": 0.7, "maxTokens": 2000, "topP": 0.9, ... }
+  config        String   // JSON
+
+  isGlobal      Boolean  @default(false) @map("is_global")
+  isDefault     Boolean  @default(false) @map("is_default")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("model_presets")
+}
+
+// ==================== MODEL USER SETTINGS ====================
+
+model ModelUserSettings {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+  modelId       String   @map("model_id") // Model ID (e.g., 'llama-3.3-70b-versatile')
+
+  // Model Management (Feature 1)
+  enabled       Boolean  @default(true) // Toggle to enable/disable specific model
+  customLabel   String?  @map("custom_label") // Custom model naming (max 50 chars)
+
+  // File Parser Settings
+  fileParser    String?  @default("auto") @map("file_parser") // auto, jina, firecrawl, exa
+  fileParserApiKey String? @map("file_parser_api_key") // Encrypted API key
+
+  // AI Provider Settings
+  aiProvider    String?  @default("auto") @map("ai_provider") // auto, groq, openrouter
+  aiProviderApiKey String? @map("ai_provider_api_key") // Encrypted API key
+
+  // Formatting Rules
+  formattingRules String? @map("formatting_rules") // Custom formatting instructions (max 2000 chars)
+
+  // System Prompt
+  systemPromptType String? @default("default") @map("system_prompt_type") // default, custom
+  customSystemPrompt String? @map("custom_system_prompt") // Custom system prompt (max 1000 chars)
+
+  // Chat Memory
+  chatMemory    Int?     @default(10) @map("chat_memory") // 0-50 messages
+  truncationStrategy String? @default("newest") @map("truncation_strategy") // newest, oldest, smart
+
+  // Advanced Settings
+  temperature   Float?   @default(0.7)
+  maxTokens     Int?     @default(2048) @map("max_tokens")
+  topP          Float?   @default(0.9) @map("top_p")
+  webSearch     Boolean? @default(false) @map("web_search")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, modelId])
+  @@index([userId])
+  @@index([modelId])
+  @@map("model_user_settings")
+}
+
+// ==================== COST LIMITS ====================
+
+model UserCostLimit {
+  id            String   @id @default(cuid())
+  userId        Int      @unique @map("user_id")
+
+  // Limit amounts (in dollars, 0 = no limit)
+  dailyLimit    Float    @default(0.0) @map("daily_limit")
+  weeklyLimit   Float    @default(0.0) @map("weekly_limit")
+  monthlyLimit  Float    @default(0.0) @map("monthly_limit")
+  sessionLimit  Float    @default(0.0) @map("session_limit") // Per-session limit
+
+  // Email alerts
+  emailAlerts   Boolean  @default(true) @map("email_alerts")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_cost_limits")
+}
+
+// ==================== ADMIN SETTINGS ====================
+
+model AdminSettings {
+  id                 String   @id @default(cuid())
+
+  // Application Settings
+  siteName           String   @default("Playground") @map("site_name")
+  siteDescription    String?  @map("site_description")
+  logoUrl            String?  @map("logo_url")
+  supportEmail       String?  @map("support_email")
+
+  // Feature Flags
+  enableRegistration Boolean  @default(true) @map("enable_registration")
+  enableVisionModels Boolean  @default(true) @map("enable_vision_models")
+  enableFileUploads  Boolean  @default(true) @map("enable_file_uploads")
+  enableSessionSharing Boolean @default(true) @map("enable_session_sharing")
+
+  // API Settings
+  maxUploadSizeMB    Int      @default(4) @map("max_upload_size_mb")
+  maxImagesPerMsg    Int      @default(5) @map("max_images_per_msg")
+  globalRateLimit    Int      @default(100) @map("global_rate_limit") // requests per minute
+  sessionTimeoutMin  Int      @default(10080) @map("session_timeout_min") // 7 days
+  maxTokensPerRequest Int     @default(8192) @map("max_tokens_per_request")
+
+  // Default Settings
+  defaultModel       String?  @map("default_model") // Default model ID
+
+  // Timestamps
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("admin_settings")
+}
+
+// ==================== PROMPT TEMPLATES ====================
+
+model PromptTemplate {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+
+  // Template Details
+  name          String
+  description   String?
+  template      String   @db.Text
+  category      String?
+  tags          String?  @default("[]")  // JSON array of tag names
+  variables     String?  @default("[]")  // JSON array of variable names
+
+  // Metadata
+  isPublic      Boolean  @default(false) @map("is_public")
+  useCount      Int      @default(0) @map("use_count")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([category])
+  @@map("prompt_templates")
+}
+
+// ==================== WORKFLOW MODELS ====================
+
+model Workflow {
+  id            String   @id @default(cuid())
+  userId        Int      @map("user_id")
+
+  // Workflow Details
+  name          String
+  description   String?
+  config        String   @db.Text // JSON workflow configuration (agents, steps, conditions)
+
+  // Metadata
+  isTemplate    Boolean  @default(false) @map("is_template") // Pre-built templates vs user-created
+  category      String?  // "Research", "Code", "Analysis", "Custom"
+  useCount      Int      @default(0) @map("use_count")
+
+  // Timestamps
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs          WorkflowRun[]
+
+  @@index([userId])
+  @@index([category])
+  @@index([isTemplate])
+  @@map("workflows")
+}
+
+model WorkflowRun {
+  id            String   @id @default(cuid())
+  workflowId    String   @map("workflow_id")
+  sessionId     String?  @map("session_id")
+
+  // Execution Data
+  input         String?  @db.Text // JSON input data for the workflow
+  output        String?  @db.Text // JSON output data from the workflow
+  status        String   // "running", "completed", "failed"
+  error         String?  @db.Text // Error message if failed
+
+  // Step Progress
+  currentStep   Int?     @default(0) @map("current_step") // Which step is currently executing
+  totalSteps    Int?     @default(0) @map("total_steps") // Total number of steps
+  stepResults   String?  @db.Text @map("step_results") // JSON array of step outputs
+
+  // Timestamps
+  startedAt     DateTime @default(now()) @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+
+  // Relations
+  workflow      Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  session       AgenticSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([workflowId])
+  @@index([sessionId])
+  @@index([status])
+  @@map("workflow_runs")
+}
+
+// ==================== AI SEARCH CONVERSATIONS ====================
+
+model AISearchConversation {
+  id        String   @id @default(cuid())
+  userId    Int      @map("user_id")
+
+  // Conversation Metadata
+  title     String?  // Auto-generated from first query (e.g., "Coffee shops in Seattle")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  AISearchMessage[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("ai_search_conversations")
+}
+
+model AISearchMessage {
+  id              String   @id @default(cuid())
+  conversationId  String   @map("conversation_id")
+
+  // Message Content
+  role            String   // "user" or "assistant"
+  content         String   @db.Text // User query or AI response
+
+  // Search Context (for assistant messages)
+  searchQuery     String?  @db.Text @map("search_query") // Optimized query used for search
+  searchType      String?  @map("search_type") // SerperSearchType: web, images, videos, etc.
+  searchResults   String?  @db.Text @map("search_results") // JSON serialized search results
+
+  // AI Cost Tracking
+  cost            Float?   // Total cost in USD (input + output)
+  inputTokens     Int?     @map("input_tokens")
+  outputTokens    Int?     @map("output_tokens")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relations
+  conversation    AISearchConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("ai_search_messages")
+}
+
+// ==================== PLAYGROUND SEARCH SESSIONS ====================
+
+model PlaygroundSession {
+  id              String   @id @default(cuid())
+  userId          Int      @map("user_id")
+
+  // Search Details
+  title           String?  // Auto-generated from search query
+  searchQuery     String   @db.Text @map("search_query")
+  searchType      String   @map("search_type") // web, images, videos, places, maps, news, scholar, shopping
+  filters         String?  @db.Text // JSON: country, language, date, results count, etc.
+
+  // Search Results (cached for restoration)
+  searchResults   String?  @db.Text @map("search_results") // JSON serialized search results
+
+  // AI Conversation
+  conversationHistory String? @db.Text @map("conversation_history") // JSON array of messages
+  selectedModel   String?  @map("selected_model") // AI model used (llama-3.1-8b-instant, etc.)
+
+  // Usage Tracking
+  messageCount    Int      @default(0) @map("message_count")
+  totalTokens     Int      @default(0) @map("total_tokens")
+  estimatedCost   Float    @default(0) @map("estimated_cost")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([searchType])
+  @@map("playground_sessions")
+}
+
+// ==================== CIA-LEVEL TRACKING & MONITORING ====================
+
+// ==================== AUDIT LOG ====================
+// Comprehensive tracking of ALL user actions and system events
+model AuditLog {
+  id              String   @id @default(cuid())
+  userId          Int?     @map("user_id") // Null for anonymous/system actions
+
+  // Event Details
+  action          String   // Action performed (e.g., "user.login", "session.create", "api.call", "page.view")
+  category        String   // Category: "auth", "session", "admin", "api", "system", "search", "user"
+  severity        String   @default("info") // "info", "warning", "error", "critical"
+
+  // Action Metadata
+  description     String?  @db.Text // Human-readable description
+  metadata        String?  @db.Text // JSON: Additional context (IPs, user agents, parameters, etc.)
+
+  // Resource Information
+  resourceType    String?  @map("resource_type") // Type of resource affected (e.g., "Session", "User", "Model")
+  resourceId      String?  @map("resource_id") // ID of the resource
+
+  // Request Information
+  ipAddress       String?  @map("ip_address")
+  userAgent       String?  @db.Text @map("user_agent")
+  requestMethod   String?  @map("request_method") // GET, POST, PUT, DELETE
+  requestPath     String?  @map("request_path") // API endpoint or page path
+
+  // Response Information
+  statusCode      Int?     @map("status_code") // HTTP status code
+  responseTime    Int?     @map("response_time") // Response time in milliseconds
+
+  // Changes Tracking
+  changesBefore   String?  @db.Text @map("changes_before") // JSON: State before action
+  changesAfter    String?  @db.Text @map("changes_after") // JSON: State after action
+
+  // Timestamps
+  timestamp       DateTime @default(now())
+
+  // Relations
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([category])
+  @@index([severity])
+  @@index([timestamp])
+  @@index([ipAddress])
+  @@map("audit_logs")
+}
+
+// ==================== SECURITY EVENTS ====================
+// Track security-related incidents and threats
+model SecurityEvent {
+  id              String   @id @default(cuid())
+  userId          Int?     @map("user_id") // Null for anonymous attempts
+
+  // Event Type
+  eventType       String   @map("event_type") // "failed_login", "rate_limit", "suspicious_activity", "brute_force", "unauthorized_access"
+  severity        String   @default("medium") // "low", "medium", "high", "critical"
+
+  // Event Details
+  description     String   @db.Text
+  details         String?  @db.Text // JSON: Additional details
+
+  // Threat Intelligence
+  ipAddress       String   @map("ip_address")
+  userAgent       String?  @db.Text @map("user_agent")
+  country         String?  // Detected country from IP
+  isVpn           Boolean? @default(false) @map("is_vpn") // VPN/Proxy detection
+  isTor           Boolean? @default(false) @map("is_tor") // Tor network detection
+
+  // Attack Details
+  attemptCount    Int      @default(1) @map("attempt_count") // Number of attempts
+  targetResource  String?  @map("target_resource") // Resource being targeted
+  attackVector    String?  @map("attack_vector") // Type of attack (if detected)
+
+  // Response Actions
+  actionTaken     String?  @map("action_taken") // "blocked", "throttled", "flagged", "none"
+  isResolved      Boolean  @default(false) @map("is_resolved")
+  resolvedAt      DateTime? @map("resolved_at")
+  resolvedBy      Int?     @map("resolved_by") // Admin who resolved
+
+  // Timestamps
+  firstSeen       DateTime @default(now()) @map("first_seen")
+  lastSeen        DateTime @default(now()) @map("last_seen")
+
+  // Relations
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([severity])
+  @@index([ipAddress])
+  @@index([firstSeen])
+  @@index([isResolved])
+  @@map("security_events")
+}
+
+// ==================== API USAGE LOGS ====================
+// Detailed API endpoint usage tracking
+model ApiUsageLog {
+  id              String   @id @default(cuid())
+  userId          Int?     @map("user_id") // Null for anonymous calls
+  apiKeyId        String?  @map("api_key_id") // If using API key authentication
+
+  // Request Details
+  method          String   // GET, POST, PUT, DELETE, PATCH
+  endpoint        String   // API endpoint path
+  fullUrl         String?  @db.Text @map("full_url") // Full URL including query params
+
+  // Request Metadata
+  ipAddress       String   @map("ip_address")
+  userAgent       String?  @db.Text @map("user_agent")
+  requestHeaders  String?  @db.Text @map("request_headers") // JSON: Selected headers
+  requestBody     String?  @db.Text @map("request_body") // JSON: Request payload (sanitized)
+  queryParams     String?  @db.Text @map("query_params") // JSON: Query parameters
+
+  // Response Details
+  statusCode      Int      @map("status_code")
+  responseTime    Int      @map("response_time") // Milliseconds
+  responseSize    Int?     @map("response_size") // Bytes
+
+  // Error Tracking
+  errorMessage    String?  @db.Text @map("error_message")
+  errorStack      String?  @db.Text @map("error_stack")
+
+  // Resource Usage
+  cpuTime         Int?     @map("cpu_time") // CPU time in milliseconds
+  memoryUsed      Int?     @map("memory_used") // Memory used in MB
+
+  // Timestamps
+  timestamp       DateTime @default(now())
+
+  // Relations
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  apiKey          ApiKey?  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([apiKeyId])
+  @@index([endpoint])
+  @@index([statusCode])
+  @@index([timestamp])
+  @@map("api_usage_logs")
+}
+
+// ==================== SEARCH ANALYTICS ====================
+// Detailed search query analytics and patterns
+model SearchAnalytics {
+  id              String   @id @default(cuid())
+  userId          Int?     @map("user_id") // Null for anonymous searches
+  sessionId       String?  @map("session_id") // PlaygroundSession or AISearchConversation ID
+
+  // Search Details
+  searchType      String   @map("search_type") // web, images, videos, places, maps, news, scholar, shopping, leakcheck
+  query           String   @db.Text // Original search query
+  normalizedQuery String?  @db.Text @map("normalized_query") // Normalized/cleaned query for analysis
+
+  // Search Parameters
+  filters         String?  @db.Text // JSON: All filters (country, language, time, etc.)
+  resultsCount    Int?     @map("results_count") // Number of results requested
+
+  // Search Results
+  actualResults   Int?     @map("actual_results") // Actual number of results returned
+  hasResults      Boolean  @default(true) @map("has_results")
+  cached          Boolean  @default(false) // Was result from cache?
+
+  // Performance Metrics
+  searchDuration  Int?     @map("search_duration") // Time taken in milliseconds
+  apiCost         Float?   @map("api_cost") // Cost of API call
+
+  // User Interaction
+  clickedResults  String?  @db.Text @map("clicked_results") // JSON: Array of clicked result indices
+  timeOnResults   Int?     @map("time_on_results") // Time spent viewing results (seconds)
+  refineCount     Int      @default(0) @map("refine_count") // Number of times query was refined
+
+  // AI Context (if used with AI chat)
+  usedAiChat      Boolean  @default(false) @map("used_ai_chat")
+  aiMessages      Int      @default(0) @map("ai_messages") // Number of AI messages in session
+  aiCost          Float?   @map("ai_cost") // Total AI cost in session
+
+  // Geographic & Device Info
+  ipAddress       String?  @map("ip_address")
+  country         String?  // User's country
+  device          String?  // mobile, desktop, tablet
+  browser         String?  // Chrome, Firefox, Safari, etc.
+
+  // Timestamps
+  timestamp       DateTime @default(now())
+
+  // Relations
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([searchType])
+  @@index([timestamp])
+  @@index([hasResults])
+  @@index([usedAiChat])
+  @@map("search_analytics")
+}
+
+// ==================== SYSTEM METRICS ====================
+// Time-series system health and performance metrics
+model SystemMetric {
+  id              String   @id @default(cuid())
+
+  // Metric Type
+  metricType      String   @map("metric_type") // "cpu", "memory", "database", "api", "requests", "errors"
+  metricName      String   @map("metric_name") // Specific metric name
+
+  // Metric Value
+  value           Float    // Numeric value
+  unit            String?  // Unit of measurement (%, MB, ms, etc.)
+
+  // Thresholds
+  warningLevel    Float?   @map("warning_level") // Threshold for warning
+  criticalLevel   Float?   @map("critical_level") // Threshold for critical
+  status          String   @default("normal") // "normal", "warning", "critical"
+
+  // Context
+  tags            String?  @db.Text // JSON: Additional tags for filtering
+  metadata        String?  @db.Text // JSON: Additional metadata
+
+  // Timestamps
+  timestamp       DateTime @default(now())
+
+  @@index([metricType])
+  @@index([metricName])
+  @@index([timestamp])
+  @@index([status])
+  @@map("system_metrics")
+}
